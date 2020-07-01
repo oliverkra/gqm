@@ -14,6 +14,7 @@ type Queue interface {
 	Publish(data []byte) Message
 	Subscribe(Subscription)
 	Unsubscribe(Subscription)
+	IsSubscribed(Subscription) bool
 }
 
 func New(name string) Queue {
@@ -72,6 +73,13 @@ func (q *queue) Unsubscribe(s Subscription) {
 		q.stats.subscriptionsCount--
 	}
 	q.muSub.Unlock()
+}
+
+func (q *queue) IsSubscribed(s Subscription) bool {
+	q.muSub.Lock()
+	_, has := q.subscriptions[s]
+	q.muSub.Unlock()
+	return has
 }
 
 func (q *queue) getNextMessage(from *message, seq uint64) *message {

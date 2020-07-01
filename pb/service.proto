@@ -28,6 +28,7 @@ message PublishResponse {
 message SubscribeRequest {
     message SubscribeCommand {
         string topic = 1;
+        string group = 2;
     }
 
     message CloseCommand {}

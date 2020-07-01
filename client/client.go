@@ -41,6 +41,10 @@ func (c *Client) PublishJSON(topic string, v interface{}) error {
 }
 
 func (c *Client) Subscribe(topic string, h SubscriptionHandler) error {
+	return c.SubscribeGroup(topic, "", h)
+}
+
+func (c *Client) SubscribeGroup(topic, group string, h SubscriptionHandler) error {
 	sc, err := c.c.Subscribe(context.Background())
 	if err != nil {
 		return err
@@ -49,6 +53,7 @@ func (c *Client) Subscribe(topic string, h SubscriptionHandler) error {
 		Command: &pb.SubscribeRequest_Subscribe{
 			Subscribe: &pb.SubscribeRequest_SubscribeCommand{
 				Topic: topic,
+				Group: group,
 			},
 		},
 	}); err != nil {

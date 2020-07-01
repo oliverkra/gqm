@@ -62,11 +62,16 @@ func Run(args []string) error {
 							Value: "gqm.test",
 							Usage: "Queue name",
 						},
+						cli.StringFlag{
+							Name:  "g,group",
+							Usage: "Group name",
+						},
 					},
 					Action: func(ctx *cli.Context) error {
 						return example.RunSub(example.SubOptions{
 							GrpcAddr: ctx.GlobalString("grpc"),
 							Queue:    ctx.String("queue"),
+							Group:    ctx.String("group"),
 						})
 					},
 				},

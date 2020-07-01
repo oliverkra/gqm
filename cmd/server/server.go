@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"log"
 	"net"
 	"sync"
 
@@ -12,6 +11,7 @@ import (
 
 	"github.com/oliverkra/gqm/pb"
 	"github.com/oliverkra/gqm/queue"
+	"github.com/sirupsen/logrus"
 )
 
 type Options struct {
@@ -24,45 +24,58 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	log.Println("listening on:", opts.GrpcAddr)
+	logrus.Println("listening on:", opts.GrpcAddr)
 	return newServer().Serve(ln)
 }
 
 func newServer() *grpc.Server {
-	queues := map[string]queue.Queue{}
 	s := grpc.NewServer()
-	pb.RegisterQueueServiceServer(s, &server{queues, &sync.Mutex{}})
+	pb.RegisterQueueServiceServer(s, &server{
+		queues: map[string]*serverQueue{},
+		mu:     &sync.Mutex{},
+	})
 	return s
 }
 
 var _ pb.QueueServiceServer = &server{}
 
 type server struct {
-	queues map[string]queue.Queue
+	queues map[string]*serverQueue
 	mu     *sync.Mutex
 }
 
-func (s *server) getTopic(name string) queue.Queue {
+func (s *server) getTopic(name string) *serverQueue {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	q, has := s.queues[name]
 	if !has {
-		q = queue.New(name)
+		q = &serverQueue{
+			queue:  queue.New(name),
+			groups: map[string]*groupSubscription{},
+			mu:     &sync.Mutex{},
+		}
 		s.queues[name] = q
-		// return nil, status.Error(codes.NotFound, "topic not exist")
 	}
 	return q
 }
 
 func (s *server) Publish(ctx context.Context, req *pb.PublishRequest) (*pb.PublishResponse, error) {
 	q := s.getTopic(req.Topic)
-	msg := q.Publish(req.Payload)
+	msg := q.queue.Publish(req.Payload)
 	return &pb.PublishResponse{Uuid: msg.UUID()}, nil
 }
 
-func (s *server) Subscribe(srv pb.QueueService_SubscribeServer) error {
-	log.Println("client connecting...")
+func (s *server) Subscribe(srv pb.QueueService_SubscribeServer) (err error) {
+	logrus.Println("client connecting...")
+	defer func() {
+		if err != nil {
+			logrus.WithError(err).Println("client disconnected with error")
+		} else {
+			logrus.Println("client disconnected")
+		}
+	}()
+
 	first, err := srv.Recv()
 	if err != nil {
 		return err
@@ -73,55 +86,70 @@ func (s *server) Subscribe(srv pb.QueueService_SubscribeServer) error {
 	}
 
 	q := s.getTopic(command.Subscribe.Topic)
-	log.Println("client connected")
-	return (&subscription{q, srv}).run()
-}
+	sub := &subscription{q.queue, srv}
 
-type subscription struct {
-	q   queue.Queue
-	srv pb.QueueService_SubscribeServer
-}
+	if command.Subscribe.Group == "" {
+		q.queue.Subscribe(sub)
+		logrus.Println("client connected")
+		defer func() {
+			logrus.Println("client disconnecting...")
+			q.queue.Unsubscribe(sub)
+			logrus.Println("client disconnected")
+		}()
+	} else {
+		g := q.getGroup(command.Subscribe.Group)
+		if !q.queue.IsSubscribed(g) {
+			q.queue.Subscribe(g)
+		}
 
-func (s *subscription) Start() uint64 { return 0 }
-
-func (s *subscription) Send(msg queue.Message) error {
-	return s.srv.Send(&pb.SubscribeResponse{
-		Response: &pb.SubscribeResponse_Message{
-			Message: &pb.Message{
-				Uuid:     msg.UUID(),
-				Sequence: msg.Sequence(),
-				Data:     msg.Data(),
-			},
-		},
-	})
-}
-
-func (s *subscription) run() error {
-	s.q.Subscribe(s)
-	defer func() {
-		log.Println("client disconnecting...")
-		s.q.Unsubscribe(s)
-		log.Println("client disconnected")
-	}()
+		g.Subscribe(sub)
+		logrus.Println("client connected")
+		defer func() {
+			logrus.Println("client disconnecting...")
+			g.Unsubscribe(sub)
+			logrus.Println("client disconnected")
+		}()
+	}
 
 	for {
 		select {
-		case <-s.srv.Context().Done():
+		case <-srv.Context().Done():
 			return nil
 
 		default:
-			command, err := s.srv.Recv()
+			command, err := srv.Recv()
 			if err != nil {
 				return err
 			}
 
 			switch cmd := command.GetCommand().(type) {
 			case *pb.SubscribeRequest_Close:
-				log.Println("Close command", cmd)
 				return nil
 			default:
-				log.Println("Unexpected command")
+				logrus.Println("Unexpected command:", cmd)
 			}
 		}
 	}
+}
+
+type serverQueue struct {
+	queue  queue.Queue
+	groups map[string]*groupSubscription
+	mu     *sync.Mutex
+}
+
+func (sq *serverQueue) getGroup(name string) *groupSubscription {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+
+	g, has := sq.groups[name]
+	if !has {
+		g = &groupSubscription{
+			subscribers:     map[queue.Subscription]struct{}{},
+			subscribersList: []queue.Subscription{},
+			mu:              &sync.Mutex{},
+		}
+		sq.groups[name] = g
+	}
+	return g
 }
