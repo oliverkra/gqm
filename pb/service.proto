@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package gqm;
+option go_package = "github.com/oliverkra/gqm/pb;pb";
+
+service QueueService {
+    rpc Publish(PublishRequest) returns (PublishResponse) {}
+
+    rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeResponse) {}
+}
+
+message Message {
+    string uuid = 1;
+    string topic = 2;
+    uint64 sequence = 3;
+    bytes data = 4;
+}
+
+message PublishRequest {
+    string topic = 1;
+    bytes payload = 2;
+}
+
+message PublishResponse {
+    string uuid = 1;
+}
+
+message SubscribeRequest {
+    message SubscribeCommand {
+        string topic = 1;
+    }
+
+    message CloseCommand {}
+
+    oneof command {
+        SubscribeCommand subscribe = 1;
+        CloseCommand close = 2;
+    }
+}
+
+message SubscribeResponse {
+    oneof response {
+        Message message = 1;
+    }
+}

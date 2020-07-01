@@ -13,6 +13,7 @@ type Queue interface {
 
 	Publish(data []byte) Message
 	Subscribe(Subscription)
+	Unsubscribe(Subscription)
 }
 
 func New(name string) Queue {
@@ -60,6 +61,16 @@ func (q *queue) Subscribe(s Subscription) {
 	q.subscriptions[s] = sc
 	q.stats.subscriptionsCount++
 	go sc.run()
+	q.muSub.Unlock()
+}
+
+func (q *queue) Unsubscribe(s Subscription) {
+	q.muSub.Lock()
+	if sc, has := q.subscriptions[s]; has {
+		sc.stop()
+		delete(q.subscriptions, s)
+		q.stats.subscriptionsCount--
+	}
 	q.muSub.Unlock()
 }
 
